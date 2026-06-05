@@ -11,6 +11,7 @@ import (
 
 func readInjectInput(input string) (string, error) {
 	if input != "" {
+		// #nosec G304 -- CLI users intentionally choose the template path to read.
 		data, err := os.ReadFile(input)
 		if err != nil {
 			return "", fmt.Errorf("read input %q: %w", input, err)
@@ -36,6 +37,7 @@ func writeInjectOutput(stdout io.Writer, content, output, outputPermissions stri
 		return err
 	}
 
+	// #nosec G304 -- CLI users intentionally choose the output path to create or overwrite.
 	file, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 	if err != nil {
 		return fmt.Errorf("open output %q: %w", output, err)

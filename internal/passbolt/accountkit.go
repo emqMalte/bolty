@@ -17,6 +17,7 @@ type AccountKit struct {
 }
 
 func ParseAccountKitFile(path string) (AccountKit, error) {
+	// #nosec G304 -- CLI users intentionally choose the account-kit path to import.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return AccountKit{}, err

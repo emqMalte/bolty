@@ -23,6 +23,7 @@ func passboltClientOptions() []passbolt.Option {
 			Timeout: 30 * time.Second,
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
+					// #nosec G402 -- Only enabled by the explicit --insecure-skip-tls-verify flag and warned on stderr.
 					InsecureSkipVerify: true,
 				},
 			},
