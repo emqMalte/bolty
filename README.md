@@ -16,6 +16,8 @@ brew tap emqMalte/homebrew-tap
 brew install --cask bolty
 ```
 
+The Homebrew cask installs shell completions for Bash, Zsh, and Fish.
+
 Verify the binary:
 
 ```bash
