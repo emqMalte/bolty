@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/v2.7.0/configuration-schema.json
+package: passbolt
+
+output: ./generated/passbolt/passbolt.gen.go
+generate:
+  client: true
+  models: true
+output-options:
+  resolve-type-name-collisions: true
+  nullable-type: true

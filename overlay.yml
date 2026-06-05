@@ -1,0 +1,24 @@
+overlay: 1.0.0
+info:
+  title: Downgrade OpenAPI 3.1 to 3.0 for oapi-codegen
+  version: 1.0.0
+actions:
+  - target: $.openapi
+    update: 3.0.3
+  - target: $.components.responses.nullBody.content.application/json.schema.properties.body
+    update:
+      type: object
+      nullable: true
+      additionalProperties: true
+  - target: $.components.responses.authGpg_login.content.application/json.schema.properties.body
+    update:
+      type: object
+      nullable: true
+      additionalProperties: true
+  - target: $.components.responses.stage0.content.application/json.schema.properties.body
+    update:
+      type: object
+      nullable: true
+      additionalProperties: true
+  - target: $.components.schemas.refreshResponse.properties.access_token.format
+    remove: true
