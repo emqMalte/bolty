@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/emqMalte/bolty/compare/v0.2.0...v0.3.0) (2026-06-06)
+
+
+### Features
+
+* automatic shell completion installation ([#5](https://github.com/emqMalte/bolty/issues/5)) ([25d8749](https://github.com/emqMalte/bolty/commit/25d874901b4d54a224ce674a7d03d1cb2431cf31))
+
 ## [0.2.0](https://github.com/emqMalte/bolty/compare/v0.1.0...v0.2.0) (2026-06-05)
 
 
