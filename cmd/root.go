@@ -28,7 +28,7 @@ var rootCmd = &cobra.Command{
 		if err := initializeConfig(cmd); err != nil {
 			return err
 		}
-		if viper.GetBool("insecure-skip-tls-verify") {
+		if viper.GetBool("insecure-skip-tls-verify") && !isCompletionCommand(cmd) {
 			fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: TLS certificate verification is disabled for this invocation.")
 		}
 		return nil
@@ -99,4 +99,13 @@ func initializeConfig(cmd *cobra.Command) error {
 	}
 
 	return nil
+}
+
+func isCompletionCommand(cmd *cobra.Command) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current.Name() == "completion" {
+			return true
+		}
+	}
+	return false
 }
