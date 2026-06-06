@@ -93,8 +93,6 @@ homebrew_casks:
       - bolty
     generate_completions_from_executable:
       executable: "bin/bolty"
-      args:
-        - completion
       base_name: bolty
       shell_parameter_format: cobra
       shells:
