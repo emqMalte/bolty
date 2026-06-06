@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/emqMalte/bolty/compare/v0.3.3...v0.3.4) (2026-06-06)
+
+
+### Bug Fixes
+
+* restrict config discovery to bolty config directory ([#14](https://github.com/emqMalte/bolty/issues/14)) ([8e44cdd](https://github.com/emqMalte/bolty/commit/8e44cdd197763234566055db02002db766ac6313))
+
 ## [0.3.3](https://github.com/emqMalte/bolty/compare/v0.3.2...v0.3.3) (2026-06-06)
 
 
