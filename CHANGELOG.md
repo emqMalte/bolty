@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/emqMalte/bolty/compare/v0.3.2...v0.3.3) (2026-06-06)
+
+
+### Bug Fixes
+
+* skip tls verification ([#12](https://github.com/emqMalte/bolty/issues/12)) ([c8a2d95](https://github.com/emqMalte/bolty/commit/c8a2d9540feca6815709830d3a80f289a2090451))
+
 ## [0.3.2](https://github.com/emqMalte/bolty/compare/v0.3.1...v0.3.2) (2026-06-06)
 
 
