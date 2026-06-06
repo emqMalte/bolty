@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/emqMalte/bolty/compare/v0.3.0...v0.3.1) (2026-06-06)
+
+
+### Bug Fixes
+
+* auto completion generation ([#8](https://github.com/emqMalte/bolty/issues/8)) ([0800bb9](https://github.com/emqMalte/bolty/commit/0800bb9822d198fd2f0ebeb2129c37e27ab34371))
+
 ## [0.3.0](https://github.com/emqMalte/bolty/compare/v0.2.0...v0.3.0) (2026-06-06)
 
 
