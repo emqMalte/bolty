@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -53,42 +54,18 @@ func init() {
 }
 
 func initializeConfig(cmd *cobra.Command) error {
-	// 1. Set up Viper to use environment variables.
 	viper.SetEnvPrefix("BOLTY")
-	// Allow for nested keys in environment variables (e.g. `BOLTY_DATABASE_HOST`)
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 	viper.AutomaticEnv()
 
-	// ```
-	// 2. Handle the configuration file.
-	if cfgFile != "" {
-		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
-	} else {
-		// Search for a config file in default locations.
-		home, err := os.UserHomeDir()
-		// Only panic if we can't get the home directory.
-		cobra.CheckErr(err)
-
-		// Search for a config file with the name "config" (without extension).
-		viper.AddConfigPath(".")
-		viper.AddConfigPath(home + "/.config/" + cliName)
-		viper.SetConfigName("config")
-		viper.SetConfigType("yaml")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	if err := readConfig(viper.GetViper(), cfgFile, home); err != nil {
+		return fmt.Errorf("read config: %w", err)
 	}
 
-	// 3. Read the configuration file.
-	// If a config file is found, read it in. We use a robust error check
-	// to ignore "file not found" errors, but panic on any other error.
-	if err := viper.ReadInConfig(); err != nil {
-		// It's okay if the config file doesn't exist.
-		var configFileNotFoundError viper.ConfigFileNotFoundError
-		if !errors.As(err, &configFileNotFoundError) {
-			return err
-		}
-	}
-
-	// 4. Bind Cobra flags to Viper.
 	if err := viper.BindPFlags(cmd.Flags()); err != nil {
 		return err
 	}
@@ -99,6 +76,25 @@ func initializeConfig(cmd *cobra.Command) error {
 		return err
 	}
 
+	return nil
+}
+
+func readConfig(v *viper.Viper, explicitPath, home string) error {
+	if explicitPath != "" {
+		v.SetConfigFile(explicitPath)
+	} else {
+		// Do not search the working directory. Files such as ~/.ssh/config
+		// are unrelated to Bolty and must never be parsed as YAML.
+		v.AddConfigPath(filepath.Join(home, ".config", cliName))
+		v.SetConfigName("config")
+	}
+
+	if err := v.ReadInConfig(); err != nil {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
+			return err
+		}
+	}
 	return nil
 }
 
