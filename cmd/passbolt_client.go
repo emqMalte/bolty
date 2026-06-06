@@ -17,19 +17,27 @@ func newPassboltClient() (*passbolt.Client, error) {
 }
 
 func passboltClientOptions() []passbolt.Option {
+	return passboltClientOptionsForTLS(insecureSkipTLSVerify)
+}
+
+func passboltClientOptionsForTLS(skipTLSVerify bool) []passbolt.Option {
 	opts := []passbolt.Option{}
-	if viper.GetBool("insecure-skip-tls-verify") {
-		opts = append(opts, passbolt.WithHTTPClient(&http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					// #nosec G402 -- Only enabled by the explicit --insecure-skip-tls-verify flag and warned on stderr.
-					InsecureSkipVerify: true,
-				},
-			},
-		}))
+	if skipTLSVerify {
+		opts = append(opts, passbolt.WithHTTPClient(insecureSkipTLSHTTPClient()))
 	}
 	return opts
+}
+
+func insecureSkipTLSHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				// #nosec G402 -- Only enabled by the explicit --insecure-skip-tls-verify flag and warned on stderr.
+				InsecureSkipVerify: true,
+			},
+		},
+	}
 }
 
 func passboltServerURL() string {

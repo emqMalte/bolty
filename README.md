@@ -197,9 +197,9 @@ bolty resources get postgres-prod
 --insecure-skip-tls-verify
 ```
 
-This disables TLS certificate validation for that single invocation. The flag is
-intended only for local development against self-signed Passbolt instances on a
-trusted network.
+This disables TLS certificate validation for that single invocation. Use it only
+when you explicitly accept the risk of connecting without certificate
+verification.
 
 - The flag is never persisted to the profile.
 - A `WARNING:` is printed to stderr when the flag is active.
