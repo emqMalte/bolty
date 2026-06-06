@@ -16,6 +16,7 @@ import (
 const cliName = "bolty"
 
 var cfgFile string
+var insecureSkipTLSVerify bool
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -28,7 +29,7 @@ var rootCmd = &cobra.Command{
 		if err := initializeConfig(cmd); err != nil {
 			return err
 		}
-		if viper.GetBool("insecure-skip-tls-verify") && !isCompletionCommand(cmd) {
+		if insecureSkipTLSVerify && !isCompletionCommand(cmd) {
 			fmt.Fprintln(cmd.ErrOrStderr(), "WARNING: TLS certificate verification is disabled for this invocation.")
 		}
 		return nil
@@ -48,7 +49,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.config/"+cliName+"/config.yaml)")
 	rootCmd.PersistentFlags().String("profile", "", "Passbolt profile to use")
 	rootCmd.PersistentFlags().String("server", "", "Passbolt server base URL")
-	rootCmd.PersistentFlags().Bool("insecure-skip-tls-verify", false, "Skip TLS certificate verification for local development")
+	rootCmd.PersistentFlags().BoolVar(&insecureSkipTLSVerify, "insecure-skip-tls-verify", false, "Skip TLS certificate verification")
 }
 
 func initializeConfig(cmd *cobra.Command) error {
