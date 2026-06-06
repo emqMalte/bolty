@@ -106,8 +106,8 @@ homebrew_casks:
     description: "Inject Passbolt secrets into local configuration files"
     license: "AGPL-3.0-only"
     commit_author:
-      name: "github-actions[bot]"
-      email: "41898282+github-actions[bot]@users.noreply.github.com"
+      name: "{{ .Env.RELEASE_BOT_NAME }}"
+      email: "{{ .Env.RELEASE_BOT_EMAIL }}"
 
 release:
   github:
