@@ -197,9 +197,11 @@ bolty resources browse
 ```
 
 The browser opens at the root and loads only that directory's direct resources.
-Enter a folder to load its resources; previously visited folders are cached for
-the current session. Use `/` to filter the currently loaded folders and
-resources.
+The browse screen uses a split pane: a complete folder tree on the left and the
+current folder's direct resources on the right. Use `Tab`, `Shift+Tab`, or the
+left and right arrows to switch panes, then select a folder with `enter`.
+Previously visited folders are cached for the current session. Use `/` to
+filter the resources already loaded in the right pane.
 
 Press `g` for an explicit global search. Passbolt cannot server-search encrypted
 v5 metadata, so global search downloads and decrypts the complete resource

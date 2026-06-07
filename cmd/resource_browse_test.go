@@ -87,8 +87,49 @@ func TestResourceBrowserLoadsOnlyRootInitially(t *testing.T) {
 	if len(loaded) != 1 || loaded[0] != "" {
 		t.Fatalf("initial loads = %v, want root only", loaded)
 	}
-	if len(model.entries) != 1 || model.entries[0].kind != folderEntry {
-		t.Fatalf("expected root child folder, got %#v", model.entries)
+	if len(model.folderRows) != 2 || model.folderRows[0].Label != "Root" || !strings.Contains(model.folderRows[1].Label, "Engineering") {
+		t.Fatalf("expected root and child folder tree, got %#v", model.folderRows)
+	}
+}
+
+func TestFolderTreeRowsRenderHierarchy(t *testing.T) {
+	t.Parallel()
+
+	rows := buildFolderTreeRows([]passbolt.FolderSummary{
+		{ID: "production", ParentID: "engineering", Name: "Production"},
+		{ID: "engineering", Name: "Engineering"},
+		{ID: "finance", Name: "Finance"},
+	})
+	if len(rows) != 4 || rows[0].Label != "Root" {
+		t.Fatalf("unexpected tree rows: %#v", rows)
+	}
+	var production string
+	for _, row := range rows {
+		if row.ID == "production" {
+			production = row.Label
+		}
+	}
+	if !strings.HasPrefix(production, "  ") || !strings.Contains(production, "Production") {
+		t.Fatalf("nested folder was not indented: %q", production)
+	}
+}
+
+func TestResourceBrowserSwitchesBetweenPanes(t *testing.T) {
+	t.Parallel()
+
+	model := initializeBrowser(t, newTestBrowser(t))
+	if model.pane != folderPane || !model.folderTree.Focused() || model.resources.Focused() {
+		t.Fatal("folder tree should be focused initially")
+	}
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyTab})
+	model = updated.(resourceBrowserModel)
+	if model.pane != resourcePane || model.folderTree.Focused() || !model.resources.Focused() {
+		t.Fatal("tab should focus the resource pane")
+	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	model = updated.(resourceBrowserModel)
+	if model.pane != folderPane {
+		t.Fatal("left should focus the folder pane")
 	}
 }
 
@@ -108,6 +149,7 @@ func TestResourceBrowserNavigatesFoldersAndUsesCache(t *testing.T) {
 	)
 	model = initializeBrowser(t, model)
 
+	model.folderTree.SetCursor(1)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -118,7 +160,7 @@ func TestResourceBrowserNavigatesFoldersAndUsesCache(t *testing.T) {
 
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'u'}})
 	model = updated.(resourceBrowserModel)
-	model.resources.SetCursor(0)
+	model.folderTree.SetCursor(1)
 	updated, cmd = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	if cmd != nil || calls[testFolderID] != 1 {
@@ -130,9 +172,11 @@ func TestResourceBrowserLocalFilterUsesLoadedEntries(t *testing.T) {
 	t.Parallel()
 
 	model := initializeBrowser(t, newTestBrowser(t))
-	model.search.SetValue("engineering")
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.search.SetValue("root api")
 	model.applyLocalFilter()
-	if len(model.filtered) != 1 || model.filtered[0].kind != folderEntry {
+	if len(model.filtered) != 1 || model.filtered[0].resource.Name != "Root API" {
 		t.Fatalf("unexpected local filter: %#v", model.filtered)
 	}
 }
@@ -163,7 +207,9 @@ func TestResourceBrowserDetailMasksAndRevealsSensitiveValues(t *testing.T) {
 	t.Parallel()
 
 	model := initializeBrowser(t, newTestBrowser(t))
-	model.resources.SetCursor(1)
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.resources.SetCursor(0)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -215,7 +261,9 @@ func TestResourceBrowserCopiesSelectedFieldValueWithoutRenderingIt(t *testing.T)
 		copied = value
 		return nil
 	}
-	model.resources.SetCursor(1)
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.resources.SetCursor(0)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -257,7 +305,9 @@ func TestResourceBrowserCopiesCurrentTOTPCode(t *testing.T) {
 		copied = value
 		return nil
 	}
-	model.resources.SetCursor(1)
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.resources.SetCursor(0)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -286,7 +336,9 @@ func TestResourceBrowserTOTPTickPreservesFieldSelection(t *testing.T) {
 	t.Parallel()
 
 	model := initializeBrowser(t, newTestBrowser(t))
-	model.resources.SetCursor(1)
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.resources.SetCursor(0)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -361,7 +413,9 @@ func TestResourceBrowserTOTPTickRecalculatesOnlyAtExpiry(t *testing.T) {
 	t.Parallel()
 
 	model := initializeBrowser(t, newTestBrowser(t))
-	model.resources.SetCursor(1)
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.resources.SetCursor(0)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -389,7 +443,9 @@ func TestResourceBrowserOffersScrollableFullDescription(t *testing.T) {
 	model.width = 60
 	model.height = 12
 	model.resize()
-	model.resources.SetCursor(1)
+	model.pane = resourcePane
+	model.syncPaneFocus()
+	model.resources.SetCursor(0)
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(resourceBrowserModel)
 	updated, _ = model.Update(cmd())
@@ -418,6 +474,11 @@ func TestResourceBrowserBuildsPassboltWebURLs(t *testing.T) {
 
 	model := initializeBrowser(t, newTestBrowser(t))
 	target, ok := model.selectedWebURL()
+	if ok || target != "" {
+		t.Fatalf("root folder should not have a web URL: %q", target)
+	}
+	model.folderTree.SetCursor(1)
+	target, ok = model.selectedWebURL()
 	if !ok || target != "https://passbolt.test/app/folders/view/"+testFolderID {
 		t.Fatalf("folder URL = %q", target)
 	}
@@ -445,11 +506,11 @@ func TestResourceTableColumnsRespondToWidthAndOmitUUID(t *testing.T) {
 		}
 	}
 	rows := resourceTableRows([]browserEntry{{
-		kind:   folderEntry,
-		folder: passbolt.FolderSummary{Name: "Engineering"},
+		kind:     resourceEntry,
+		resource: passbolt.ResourceSummary{Name: "API"},
 	}}, narrow)
-	if len(rows) != 1 || len(rows[0]) != 1 || rows[0][0] != "Engineering" {
-		t.Fatalf("narrow row should retain the folder name: %#v", rows)
+	if len(rows) != 1 || len(rows[0]) != 1 || rows[0][0] != "API" {
+		t.Fatalf("narrow row should retain the resource name: %#v", rows)
 	}
 }
 

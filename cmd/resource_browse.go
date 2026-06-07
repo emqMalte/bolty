@@ -63,6 +63,18 @@ type browserEntry struct {
 	resource passbolt.ResourceSummary
 }
 
+type browserPane int
+
+const (
+	folderPane browserPane = iota
+	resourcePane
+)
+
+type folderTreeRow struct {
+	ID    string
+	Label string
+}
+
 type resourceLoadedMsg struct {
 	resource passbolt.DecryptedResource
 	err      error
@@ -100,11 +112,14 @@ type resourceBrowserModel struct {
 	ctx          context.Context
 	view         browserView
 	mode         searchMode
+	pane         browserPane
+	folderTree   table.Model
 	resources    table.Model
 	fields       table.Model
 	description  viewport.Model
 	search       textinput.Model
 	folders      []passbolt.FolderSummary
+	folderRows   []folderTreeRow
 	folderByID   map[string]passbolt.FolderSummary
 	currentDir   string
 	cache        map[string][]passbolt.ResourceSummary
@@ -127,6 +142,7 @@ type resourceBrowserModel struct {
 	height       int
 	fieldCols    int
 	resourceDefs []table.Column
+	folderWidth  int
 }
 
 func newResourceBrowserModel(
@@ -152,6 +168,16 @@ func newResourceBrowserModel(
 		table.WithFocused(true),
 	)
 	resources.SetStyles(browserTableStyles())
+	folderRows := buildFolderTreeRows(folders)
+	folderTree := table.New(
+		table.WithColumns([]table.Column{{Title: "Folders", Width: 28}}),
+		table.WithRows(folderTableRows(folderRows)),
+		table.WithWidth(30),
+		table.WithHeight(17),
+		table.WithFocused(true),
+	)
+	folderTree.SetStyles(browserTableStyles())
+	resources.Blur()
 
 	fieldColumns := fieldTableColumns(80)
 	fields := table.New(
@@ -169,11 +195,14 @@ func newResourceBrowserModel(
 	}
 	return resourceBrowserModel{
 		ctx:          ctx,
+		pane:         folderPane,
+		folderTree:   folderTree,
 		resources:    resources,
 		fields:       fields,
 		description:  description,
 		search:       search,
 		folders:      folders,
+		folderRows:   folderRows,
 		folderByID:   folderByID,
 		cache:        map[string][]passbolt.ResourceSummary{},
 		loadFolder:   loadFolder,
@@ -229,6 +258,8 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case "/":
 				if m.view == resourceBrowserView {
+					m.pane = resourcePane
+					m.syncPaneFocus()
 					m.mode = localSearchMode
 					m.search.Prompt = "Filter: "
 					m.search.Placeholder = "filter loaded items"
@@ -237,6 +268,8 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case "g":
 				if m.view == resourceBrowserView {
+					m.pane = resourcePane
+					m.syncPaneFocus()
 					m.mode = globalSearchMode
 					m.search.Prompt = "Global: "
 					m.search.Placeholder = "downloads and searches all resources"
@@ -244,7 +277,19 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.search.Focus()
 					return m, textinput.Blink
 				}
-			case "esc", "backspace", "left", "u":
+			case "tab", "shift+tab":
+				if m.view == resourceBrowserView {
+					m.togglePane()
+					return m, nil
+				}
+			case "left":
+				if m.view == resourceBrowserView {
+					m.pane = folderPane
+					m.syncPaneFocus()
+					return m, nil
+				}
+				fallthrough
+			case "esc", "backspace", "u":
 				if m.view == descriptionBrowserView {
 					m.view = fieldBrowserView
 					return m, nil
@@ -258,21 +303,24 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.globalReturn != "" || strings.HasPrefix(m.status, "Global results") {
 					return m.restoreDirectory()
 				}
-				if m.currentDir != "" {
-					parent := m.folderByID[m.currentDir].ParentID
-					return m.openDirectory(parent)
+			case "right":
+				if m.view == resourceBrowserView {
+					m.pane = resourcePane
+					m.syncPaneFocus()
+					return m, nil
 				}
-			case "enter", "right":
+				fallthrough
+			case "enter":
 				if m.loading {
 					return m, nil
 				}
 				if m.view == resourceBrowserView {
+					if m.pane == folderPane {
+						return m.openSelectedFolder()
+					}
 					entry, ok := m.selectedEntry()
 					if !ok {
 						return m, nil
-					}
-					if entry.kind == folderEntry {
-						return m.openDirectory(entry.folder.ID)
 					}
 					m.loading = true
 					m.status = "Loading resource details..."
@@ -326,6 +374,7 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.search.SetValue("")
 		m.rebuildDirectoryEntries()
+		m.selectFolder(msg.folderID)
 		return m, nil
 	case globalSearchMsg:
 		m.loading = false
@@ -334,6 +383,8 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.globalReturn = m.currentDir
+		m.pane = resourcePane
+		m.syncPaneFocus()
 		m.entries = resourceEntries(msg.items)
 		m.filtered = append([]browserEntry(nil), m.entries...)
 		m.resources.SetRows(resourceTableRows(m.filtered, m.resourceDefs))
@@ -405,7 +456,11 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if m.view == fieldBrowserView {
 		m.fields, cmd = m.fields.Update(msg)
 	} else {
-		m.resources, cmd = m.resources.Update(msg)
+		if m.pane == folderPane {
+			m.folderTree, cmd = m.folderTree.Update(msg)
+		} else {
+			m.resources, cmd = m.resources.Update(msg)
+		}
 	}
 	return m, cmd
 }
@@ -424,8 +479,8 @@ func (m resourceBrowserModel) View() string {
 		count += "s"
 	}
 	header := title + "  " + location + "  " + faintStyle().Render(count)
-	help := faintStyle().Render("/ filter  g global search  enter open  u/← up  o web  q quit")
-	parts := []string{header, m.search.View(), m.resources.View(), m.selectedEntryDetail()}
+	help := faintStyle().Render("tab/←/→ switch pane  enter select/open  / filter  g global search  o web  q quit")
+	parts := []string{header, m.search.View(), m.splitPaneView(), m.selectedEntryDetail()}
 	if m.status != "" {
 		parts = append(parts, statusStyle().Render(safeDisplayText(m.status)))
 	}
@@ -477,20 +532,129 @@ func (m resourceBrowserModel) restoreDirectory() (tea.Model, tea.Cmd) {
 }
 
 func (m *resourceBrowserModel) rebuildDirectoryEntries() {
-	entries := make([]browserEntry, 0)
-	for _, folder := range m.folders {
-		if folder.ParentID == m.currentDir {
-			entries = append(entries, browserEntry{kind: folderEntry, folder: folder})
-		}
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return strings.ToLower(entries[i].folder.Name) < strings.ToLower(entries[j].folder.Name)
-	})
-	entries = append(entries, resourceEntries(m.cache[m.currentDir])...)
+	entries := resourceEntries(m.cache[m.currentDir])
 	m.entries = entries
 	m.filtered = append([]browserEntry(nil), entries...)
 	m.resources.SetRows(resourceTableRows(m.filtered, m.resourceDefs))
 	m.resources.SetCursor(0)
+}
+
+func buildFolderTreeRows(folders []passbolt.FolderSummary) []folderTreeRow {
+	children := map[string][]passbolt.FolderSummary{}
+	for _, folder := range folders {
+		children[folder.ParentID] = append(children[folder.ParentID], folder)
+	}
+	for parentID := range children {
+		sort.Slice(children[parentID], func(i, j int) bool {
+			return strings.ToLower(children[parentID][i].Name) < strings.ToLower(children[parentID][j].Name)
+		})
+	}
+
+	rows := []folderTreeRow{{ID: "", Label: "Root"}}
+	seen := map[string]struct{}{}
+	var appendChildren func(string, int)
+	appendChildren = func(parentID string, depth int) {
+		items := children[parentID]
+		for i, folder := range items {
+			if _, exists := seen[folder.ID]; exists {
+				continue
+			}
+			seen[folder.ID] = struct{}{}
+			branch := "├─ "
+			if i == len(items)-1 {
+				branch = "└─ "
+			}
+			rows = append(rows, folderTreeRow{
+				ID:    folder.ID,
+				Label: strings.Repeat("  ", depth) + branch + valueOrDash(folder.Name),
+			})
+			appendChildren(folder.ID, depth+1)
+		}
+	}
+	appendChildren("", 0)
+	return rows
+}
+
+func folderTableRows(rows []folderTreeRow) []table.Row {
+	result := make([]table.Row, len(rows))
+	for i, row := range rows {
+		result[i] = table.Row{safeTreeText(row.Label)}
+	}
+	return result
+}
+
+func (m *resourceBrowserModel) togglePane() {
+	if m.pane == folderPane {
+		m.pane = resourcePane
+	} else {
+		m.pane = folderPane
+	}
+	m.syncPaneFocus()
+}
+
+func (m *resourceBrowserModel) syncPaneFocus() {
+	if m.pane == folderPane {
+		m.folderTree.Focus()
+		m.resources.Blur()
+	} else {
+		m.folderTree.Blur()
+		m.resources.Focus()
+	}
+}
+
+func (m resourceBrowserModel) selectedFolderID() (string, bool) {
+	index := m.folderTree.Cursor()
+	if index < 0 || index >= len(m.folderRows) {
+		return "", false
+	}
+	return m.folderRows[index].ID, true
+}
+
+func (m resourceBrowserModel) openSelectedFolder() (tea.Model, tea.Cmd) {
+	id, ok := m.selectedFolderID()
+	if !ok {
+		return m, nil
+	}
+	return m.openDirectory(id)
+}
+
+func (m *resourceBrowserModel) selectFolder(id string) {
+	for i, row := range m.folderRows {
+		if row.ID == id {
+			m.folderTree.SetCursor(i)
+			return
+		}
+	}
+}
+
+func (m resourceBrowserModel) splitPaneView() string {
+	leftWidth := m.folderWidth
+	if leftWidth <= 0 {
+		leftWidth = 30
+	}
+	rightWidth := max(m.width-leftWidth, 16)
+	leftTitle := "Folders"
+	rightTitle := "Secrets"
+	if m.pane == folderPane {
+		leftTitle = "Folders •"
+	} else {
+		rightTitle = "Secrets •"
+	}
+	left := paneStyle(m.pane == folderPane, leftWidth).Render(titleStyle().Render(leftTitle) + "\n" + m.folderTree.View())
+	right := paneStyle(m.pane == resourcePane, rightWidth).Render(titleStyle().Render(rightTitle) + "\n" + m.resources.View())
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+}
+
+func paneStyle(focused bool, width int) lipgloss.Style {
+	color := lipgloss.AdaptiveColor{Light: "#D1D5DB", Dark: "#4B5563"}
+	if focused {
+		color = lipgloss.AdaptiveColor{Light: "#7C3AED", Dark: "#C084FC"}
+	}
+	return lipgloss.NewStyle().
+		Width(max(width-4, 10)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(color).
+		Padding(0, 1)
 }
 
 func resourceEntries(resources []passbolt.ResourceSummary) []browserEntry {
@@ -521,9 +685,6 @@ func (m *resourceBrowserModel) applyLocalFilter() {
 }
 
 func entryFilterValue(entry browserEntry) string {
-	if entry.kind == folderEntry {
-		return entry.folder.Name
-	}
 	r := entry.resource
 	values := []string{r.Name, r.Username, r.URI, r.Description, r.FolderPath, r.ID, r.ResourceType}
 	values = append(values, r.URIs...)
@@ -550,17 +711,9 @@ func resourceTableRows(entries []browserEntry, columns []table.Column) []table.R
 		for _, column := range columns {
 			switch column.Title {
 			case "Type":
-				if entry.kind == folderEntry {
-					row = append(row, "Folder")
-				} else {
-					row = append(row, "Secret")
-				}
+				row = append(row, "Secret")
 			case "Name":
-				if entry.kind == folderEntry {
-					row = append(row, safeDisplayText(entry.folder.Name))
-				} else {
-					row = append(row, safeDisplayText(entry.resource.Name))
-				}
+				row = append(row, safeDisplayText(entry.resource.Name))
 			case "Username":
 				row = append(row, safeDisplayText(entry.resource.Username))
 			case "URI":
@@ -710,12 +863,16 @@ func (m resourceBrowserModel) selectedEntry() (browserEntry, bool) {
 }
 
 func (m resourceBrowserModel) selectedEntryDetail() string {
+	if m.pane == folderPane {
+		id, ok := m.selectedFolderID()
+		if !ok {
+			return faintStyle().Render("No folder selected")
+		}
+		return labeledDetail("Folder", m.pathFor(id)) + "   " + labeledDetail("Resources", folderResourceCount(m.cache[id]))
+	}
 	entry, ok := m.selectedEntry()
 	if !ok {
 		return faintStyle().Render("No matching items")
-	}
-	if entry.kind == folderEntry {
-		return labeledDetail("Folder", m.pathFor(entry.folder.ID)) + "   " + labeledDetail("ID", entry.folder.ID)
 	}
 	r := entry.resource
 	return strings.Join([]string{
@@ -729,14 +886,25 @@ func (m resourceBrowserModel) selectedWebURL() (string, bool) {
 	if m.view != resourceBrowserView && m.resource.ID != "" {
 		return m.serverURL + "/app/passwords/view/" + url.PathEscape(m.resource.ID), true
 	}
+	if m.pane == folderPane {
+		id, ok := m.selectedFolderID()
+		if !ok || id == "" {
+			return "", false
+		}
+		return m.serverURL + "/app/folders/view/" + url.PathEscape(id), true
+	}
 	entry, ok := m.selectedEntry()
 	if !ok {
 		return "", false
 	}
-	if entry.kind == folderEntry {
-		return m.serverURL + "/app/folders/view/" + url.PathEscape(entry.folder.ID), true
-	}
 	return m.serverURL + "/app/passwords/view/" + url.PathEscape(entry.resource.ID), true
+}
+
+func folderResourceCount(resources []passbolt.ResourceSummary) string {
+	if resources == nil {
+		return "not loaded"
+	}
+	return strconv.Itoa(len(resources))
 }
 
 func (m resourceBrowserModel) currentPath() string { return m.pathFor(m.currentDir) }
@@ -766,13 +934,21 @@ func (m resourceBrowserModel) pathFor(id string) string {
 }
 
 func (m *resourceBrowserModel) resize() {
-	resourceColumns := resourceTableColumns(m.width)
+	totalWidth := max(m.width, 36)
+	m.folderWidth = min(max(totalWidth/3, 16), 32)
+	resourceWidth := max(totalWidth-m.folderWidth, 16)
+	m.folderTree.SetRows(nil)
+	m.folderTree.SetColumns([]table.Column{{Title: "Folder", Width: max(m.folderWidth-6, 12)}})
+	m.folderTree.SetRows(folderTableRows(m.folderRows))
+	m.folderTree.SetWidth(max(m.folderWidth-2, 16))
+	m.folderTree.SetHeight(max(m.height-11, 5))
+	resourceColumns := resourceTableColumns(resourceWidth)
 	m.resourceDefs = resourceColumns
 	m.resources.SetRows(nil)
 	m.resources.SetColumns(resourceColumns)
 	m.resources.SetRows(resourceTableRows(m.filtered, m.resourceDefs))
-	m.resources.SetWidth(m.width)
-	m.resources.SetHeight(max(m.height-9, 5))
+	m.resources.SetWidth(resourceWidth)
+	m.resources.SetHeight(max(m.height-11, 5))
 	fieldColumns := fieldTableColumns(m.width)
 	m.fieldCols = len(fieldColumns)
 	m.fields.SetRows(nil)
@@ -786,6 +962,7 @@ func (m *resourceBrowserModel) resize() {
 		m.refreshDescription()
 		m.refreshFieldRows(false)
 	}
+	m.syncPaneFocus()
 }
 
 func (m *resourceBrowserModel) refreshDescription() {
@@ -880,6 +1057,15 @@ func safeDisplayText(value string) string {
 	return strings.Join(strings.FieldsFunc(value, func(r rune) bool {
 		return unicode.IsSpace(r) || unicode.IsControl(r)
 	}), " ")
+}
+
+func safeTreeText(value string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, value)
 }
 
 func safeMultilineText(value string) string {
