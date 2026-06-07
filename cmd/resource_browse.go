@@ -50,16 +50,7 @@ const (
 	globalSearchMode
 )
 
-type entryKind int
-
-const (
-	folderEntry entryKind = iota
-	resourceEntry
-)
-
 type browserEntry struct {
-	kind     entryKind
-	folder   passbolt.FolderSummary
 	resource passbolt.ResourceSummary
 }
 
@@ -205,6 +196,7 @@ func newResourceBrowserModel(
 		folderRows:   folderRows,
 		folderByID:   folderByID,
 		cache:        map[string][]passbolt.ResourceSummary{},
+		loading:      true,
 		loadFolder:   loadFolder,
 		searchAll:    searchAll,
 		loadResource: loadResource,
@@ -217,7 +209,6 @@ func newResourceBrowserModel(
 }
 
 func (m resourceBrowserModel) Init() tea.Cmd {
-	m.loading = true
 	return loadDirectoryCmd(m.ctx, m.loadFolder, "")
 }
 
@@ -257,7 +248,7 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case "ctrl+c", "q":
 				return m, tea.Quit
 			case "/":
-				if m.view == resourceBrowserView {
+				if m.view == resourceBrowserView && !m.loading {
 					m.pane = resourcePane
 					m.syncPaneFocus()
 					m.mode = localSearchMode
@@ -267,7 +258,7 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, textinput.Blink
 				}
 			case "g":
-				if m.view == resourceBrowserView {
+				if m.view == resourceBrowserView && !m.loading {
 					m.pane = resourcePane
 					m.syncPaneFocus()
 					m.mode = globalSearchMode
@@ -404,7 +395,10 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view = fieldBrowserView
 		m.refreshDescription()
 		m.refreshFieldRows(true)
-		return m, totpTickCmd(time.Now())
+		if m.hasTOTP {
+			return m, totpTickCmd(time.Now())
+		}
+		return m, nil
 	case totpTickMsg:
 		if m.view == fieldBrowserView {
 			now := time.Time(msg)
@@ -412,9 +406,12 @@ func (m resourceBrowserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.refreshTOTPStatus(now)
 			}
 			m.refreshTOTPRow(now)
-			return m, totpTickCmd(now)
+			if m.hasTOTP {
+				return m, totpTickCmd(now)
+			}
+			return m, nil
 		}
-		if m.view == descriptionBrowserView {
+		if m.view == descriptionBrowserView && m.hasTOTP {
 			return m, totpTickCmd(time.Time(msg))
 		}
 		return m, nil
@@ -660,7 +657,7 @@ func paneStyle(focused bool, width int) lipgloss.Style {
 func resourceEntries(resources []passbolt.ResourceSummary) []browserEntry {
 	entries := make([]browserEntry, 0, len(resources))
 	for _, resource := range resources {
-		entries = append(entries, browserEntry{kind: resourceEntry, resource: resource})
+		entries = append(entries, browserEntry{resource: resource})
 	}
 	return entries
 }
@@ -771,7 +768,7 @@ func (m *resourceBrowserModel) refreshTOTPRow(now time.Time) {
 		if field.Selector != string(injectcore.FieldTOTP) {
 			continue
 		}
-		value := m.totp.Code
+		var value string
 		if !m.hasTOTP {
 			value = "<unavailable>"
 		} else {
@@ -1149,6 +1146,9 @@ type referenceClipboard struct {
 }
 
 func (c referenceClipboard) Copy(text string) error {
+	if c.nativeWrite == nil {
+		return errors.New("system clipboard unavailable")
+	}
 	if err := c.nativeWrite(text); err == nil {
 		return nil
 	} else if c.terminalAvailable() {
@@ -1172,16 +1172,22 @@ func isTerminal(value any) bool {
 }
 
 func openBrowser(target string) error {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" || parsed.User != nil ||
+		(!strings.EqualFold(parsed.Scheme, "https") && !strings.EqualFold(parsed.Scheme, "http")) {
+		return fmt.Errorf("refusing to open invalid web URL")
+	}
+
 	var command *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
-		command = exec.Command("open", target)
+		command = exec.Command("open", target) // #nosec G204 -- target is restricted to an absolute HTTP(S) URL above.
 	case "windows":
-		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", target)
+		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", target) // #nosec G204 -- validated URL argument, fixed executable.
 	default:
-		command = exec.Command("xdg-open", target)
+		command = exec.Command("xdg-open", target) // #nosec G204 -- target is restricted to an absolute HTTP(S) URL above.
 	}
-	return command.Start()
+	return command.Run()
 }
 
 func runResourcesBrowse(cmd *cobra.Command, _ []string) error {

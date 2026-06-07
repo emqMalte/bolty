@@ -272,6 +272,49 @@ func TestTOTPInfoDoesNotGenerateCode(t *testing.T) {
 	}
 }
 
+func TestTOTPRejectsInvalidWindowsWithoutPanicking(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		period int
+		now    time.Time
+	}{
+		{name: "zero period", period: 0, now: time.Unix(70, 0)},
+		{name: "negative time", period: 30, now: time.Unix(-1, 0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resource := passbolt.DecryptedResource{
+				Secrets: []any{map[string]any{"totp": map[string]any{
+					"secret_key": "DAV3DS4ERAAF5QGH",
+					"period":     test.period,
+					"digits":     6,
+					"algorithm":  "SHA1",
+				}}},
+			}
+			if _, ok := TOTPInfoAt(resource, test.now); ok {
+				t.Fatal("invalid TOTP metadata should not be available")
+			}
+			if _, ok := TOTPStatusAt(resource, test.now); ok {
+				t.Fatal("invalid TOTP metadata should not generate a code")
+			}
+		})
+	}
+}
+
+func TestGenerateTOTPAcceptsPaddedBase32Secret(t *testing.T) {
+	t.Parallel()
+
+	secret := base32.StdEncoding.EncodeToString([]byte("12345678901234567890"))
+	got, err := generateTOTP(secret, "SHA1", 8, 30, time.Unix(59, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "94287082" {
+		t.Fatalf("generateTOTP() = %q", got)
+	}
+}
+
 func TestPassboltRefValueReportsMissingURI(t *testing.T) {
 	t.Parallel()
 

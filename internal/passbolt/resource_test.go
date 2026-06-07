@@ -667,6 +667,25 @@ func TestResourceURIsSupportsLegacyAndNestedMetadata(t *testing.T) {
 	}
 }
 
+func TestResourceURIsIgnoresURIKeysInsideCustomFields(t *testing.T) {
+	t.Parallel()
+
+	got := ResourceURIs(map[string]any{
+		"uri": "https://primary.test",
+		"custom_fields": map[string]any{
+			"url": "must-not-be-displayed",
+		},
+	}, []any{map[string]any{
+		"custom_fields": []any{map[string]any{
+			"name": "private endpoint",
+			"url":  "must-not-be-displayed-either",
+		}},
+	}})
+	if value := strings.Join(got, ","); value != "https://primary.test" {
+		t.Fatalf("ResourceURIs() = %q", value)
+	}
+}
+
 func TestFolderBreadcrumbBuildsRootToLeafPath(t *testing.T) {
 	t.Parallel()
 
