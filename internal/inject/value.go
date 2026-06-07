@@ -1,9 +1,18 @@
 package inject
 
 import (
+	"crypto/hmac"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base32"
+	"encoding/binary"
 	"fmt"
+	"hash"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/emqmalte/bolty/internal/passbolt"
 )
@@ -44,7 +53,7 @@ func passboltRefValue(resource passbolt.DecryptedResource, ref PassboltRef) (str
 		}
 		return "", fmt.Errorf("resource %s does not contain a description", resourceIDForError(resource, ref))
 	case FieldTOTP:
-		if value, ok := metadataOrSecretField(resource, "totp"); ok {
+		if value, ok := resourceTOTP(resource); ok {
 			return value, nil
 		}
 		return "", fmt.Errorf("resource %s does not contain a totp", resourceIDForError(resource, ref))
@@ -102,27 +111,202 @@ func firstSecretField(secrets []any, key string) (string, bool) {
 }
 
 func resourceURI(resource passbolt.DecryptedResource) (string, bool) {
-	if value, ok := nonEmptyStringField(resource.Metadata, "uri"); ok {
-		return value, true
+	uris := passbolt.ResourceURIs(resource.Metadata, resource.Secrets)
+	if len(uris) > 0 {
+		return uris[0], true
 	}
-	if value, ok := firstStringInField(resource.Metadata, "uris"); ok {
-		return value, true
-	}
+	return "", false
+}
 
+func resourceTOTP(resource passbolt.DecryptedResource) (string, bool) {
+	status, ok := TOTPStatusAt(resource, time.Now())
+	return status.Code, ok
+}
+
+type TOTPStatus struct {
+	Code      string
+	Digits    int
+	Period    time.Duration
+	ExpiresAt time.Time
+}
+
+func TOTPStatusAt(resource passbolt.DecryptedResource, now time.Time) (TOTPStatus, bool) {
+	info, ok := TOTPInfoAt(resource, now)
+	if !ok {
+		return TOTPStatus{}, false
+	}
+	if info.Code != "" {
+		return info, true
+	}
+	if status, ok := totpField(resource.Metadata, now, true); ok {
+		return status, true
+	}
 	for _, secret := range resource.Secrets {
-		secretMap, ok := secret.(map[string]any)
+		payload, ok := secret.(map[string]any)
 		if !ok {
 			continue
 		}
-		if value, ok := nonEmptyStringField(secretMap, "uri"); ok {
-			return value, true
-		}
-		if value, ok := firstStringInField(secretMap, "uris"); ok {
-			return value, true
+		if status, ok := totpField(payload, now, true); ok {
+			return status, true
 		}
 	}
+	return TOTPStatus{}, false
+}
 
-	return "", false
+func TOTPInfoAt(resource passbolt.DecryptedResource, now time.Time) (TOTPStatus, bool) {
+	if status, ok := totpField(resource.Metadata, now, false); ok {
+		return status, true
+	}
+	for _, secret := range resource.Secrets {
+		payload, ok := secret.(map[string]any)
+		if !ok {
+			continue
+		}
+		if status, ok := totpField(payload, now, false); ok {
+			return status, true
+		}
+	}
+	return TOTPStatus{}, false
+}
+
+func totpField(payload map[string]any, now time.Time, generate bool) (TOTPStatus, bool) {
+	raw, ok := payload["totp"]
+	if !ok {
+		return TOTPStatus{}, false
+	}
+	if value, ok := valueAsString(raw); ok {
+		value = strings.TrimSpace(value)
+		if len(value) >= 6 && len(value) <= 8 && strings.IndexFunc(value, func(r rune) bool {
+			return r < '0' || r > '9'
+		}) == -1 {
+			return TOTPStatus{Code: value, Digits: len(value)}, true
+		}
+		return totpCodeFromURI(value, now, generate)
+	}
+
+	totp, ok := raw.(map[string]any)
+	if !ok {
+		return TOTPStatus{}, false
+	}
+	secret, ok := stringField(totp, "secret_key")
+	if !ok || strings.TrimSpace(secret) == "" {
+		return TOTPStatus{}, false
+	}
+
+	algorithm := "SHA1"
+	if value, ok := stringField(totp, "algorithm"); ok && strings.TrimSpace(value) != "" {
+		algorithm = value
+	}
+	digits := 6
+	if value, ok := integerField(totp, "digits"); ok {
+		digits = value
+	}
+	period := 30
+	if value, ok := integerField(totp, "period"); ok {
+		period = value
+	}
+	if !generate {
+		return newTOTPStatus("", digits, period, now), true
+	}
+	code, err := generateTOTP(secret, algorithm, digits, period, now)
+	if err != nil {
+		return TOTPStatus{}, false
+	}
+	return newTOTPStatus(code, digits, period, now), true
+}
+
+func totpCodeFromURI(value string, now time.Time, generate bool) (TOTPStatus, bool) {
+	parsed, err := url.Parse(value)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "otpauth") || !strings.EqualFold(parsed.Host, "totp") {
+		return TOTPStatus{}, false
+	}
+	query := parsed.Query()
+	digits := queryInteger(query, "digits", 6)
+	period := queryInteger(query, "period", 30)
+	if !generate {
+		return newTOTPStatus("", digits, period, now), true
+	}
+	code, err := generateTOTP(query.Get("secret"), query.Get("algorithm"), digits, period, now)
+	if err != nil {
+		return TOTPStatus{}, false
+	}
+	return newTOTPStatus(code, digits, period, now), true
+}
+
+func newTOTPStatus(code string, digits, period int, now time.Time) TOTPStatus {
+	periodDuration := time.Duration(period) * time.Second
+	nextCounter := now.Unix()/int64(period) + 1
+	return TOTPStatus{
+		Code:      code,
+		Digits:    digits,
+		Period:    periodDuration,
+		ExpiresAt: time.Unix(nextCounter*int64(period), 0),
+	}
+}
+
+func generateTOTP(secret, algorithm string, digits, period int, now time.Time) (string, error) {
+	if period <= 0 {
+		return "", fmt.Errorf("invalid TOTP period %d", period)
+	}
+	if digits < 6 || digits > 8 {
+		return "", fmt.Errorf("invalid TOTP digits %d", digits)
+	}
+
+	normalizedSecret := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(secret), " ", ""))
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(normalizedSecret)
+	if err != nil || len(key) == 0 {
+		return "", fmt.Errorf("invalid TOTP secret")
+	}
+
+	var hashFunc func() hash.Hash
+	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
+	case "", "SHA1":
+		hashFunc = sha1.New
+	case "SHA256":
+		hashFunc = sha256.New
+	case "SHA512":
+		hashFunc = sha512.New
+	default:
+		return "", fmt.Errorf("unsupported TOTP algorithm %q", algorithm)
+	}
+
+	counter := uint64(now.Unix() / int64(period))
+	message := make([]byte, 8)
+	binary.BigEndian.PutUint64(message, counter)
+	mac := hmac.New(hashFunc, key)
+	_, _ = mac.Write(message)
+	sum := mac.Sum(nil)
+	offset := sum[len(sum)-1] & 0x0f
+	binaryCode := (uint32(sum[offset])&0x7f)<<24 |
+		uint32(sum[offset+1])<<16 |
+		uint32(sum[offset+2])<<8 |
+		uint32(sum[offset+3])
+	modulus := uint32(1)
+	for range digits {
+		modulus *= 10
+	}
+	return fmt.Sprintf("%0*d", digits, binaryCode%modulus), nil
+}
+
+func integerField(values map[string]any, key string) (int, bool) {
+	value, ok := valueAsString(values[key])
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(value)
+	return parsed, err == nil
+}
+
+func queryInteger(values url.Values, key string, fallback int) int {
+	value := strings.TrimSpace(values.Get(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 // Passbolt v5 stores custom field labels in metadata and secret values in secrets.
@@ -254,38 +438,6 @@ func customFieldStoredValue(field map[string]any) (string, bool) {
 			return value, true
 		}
 	}
-	return "", false
-}
-
-func nonEmptyStringField(values map[string]any, key string) (string, bool) {
-	value, ok := stringField(values, key)
-	if !ok || strings.TrimSpace(value) == "" {
-		return "", false
-	}
-	return value, true
-}
-
-func firstStringInField(values map[string]any, key string) (string, bool) {
-	raw, ok := values[key]
-	if !ok {
-		return "", false
-	}
-
-	switch typed := raw.(type) {
-	case []any:
-		for _, item := range typed {
-			if value, ok := valueAsString(item); ok && strings.TrimSpace(value) != "" {
-				return value, true
-			}
-		}
-	case []string:
-		for _, value := range typed {
-			if strings.TrimSpace(value) != "" {
-				return value, true
-			}
-		}
-	}
-
 	return "", false
 }
 

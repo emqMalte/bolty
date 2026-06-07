@@ -75,6 +75,14 @@ var resourcesListCmd = &cobra.Command{
 	},
 }
 
+var resourcesBrowseCmd = &cobra.Command{
+	Use:          "browse",
+	Short:        "Browse resources and copy injectable field references",
+	Args:         cobra.NoArgs,
+	SilenceUsage: true,
+	RunE:         runResourcesBrowse,
+}
+
 func writeResourceOutput(w io.Writer, resource passbolt.DecryptedResource, debug bool) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
@@ -92,9 +100,10 @@ func writeResourceOutput(w io.Writer, resource passbolt.DecryptedResource, debug
 
 func init() {
 	rootCmd.AddCommand(resourcesCmd)
-	resourcesCmd.AddCommand(resourcesGetCmd, resourcesListCmd)
+	resourcesCmd.AddCommand(resourcesGetCmd, resourcesListCmd, resourcesBrowseCmd)
 	resourcesGetCmd.Flags().Bool("debug", false, "Print resource lookup diagnostics without decrypted secret values")
 	resourcesListCmd.Flags().String("search", "", "Filter resources by visible summary fields")
 	addPassphraseEnvFlag(resourcesGetCmd)
 	addPassphraseEnvFlag(resourcesListCmd)
+	addPassphraseEnvFlag(resourcesBrowseCmd)
 }
