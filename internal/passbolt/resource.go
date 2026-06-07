@@ -81,7 +81,10 @@ func (s ResourceService) Get(ctx context.Context, profile Profile, idOrName stri
 func (s ResourceService) List(ctx context.Context, profile Profile, search string, opts ...Option) ([]ResourceSummary, error) {
 	folders, err := s.ListFolders(ctx, profile, opts...)
 	if err != nil {
-		return nil, err
+		if s.Debug != nil {
+			fmt.Fprintf(s.Debug, "list resources: folder paths unavailable: %v\n", err)
+		}
+		folders = nil
 	}
 	resources, err := s.listResources(ctx, profile, indexResourcesParams(), nil, folderSummaryMap(folders), opts...)
 	if err != nil {
@@ -823,46 +826,40 @@ func ResourceURIs(metadata map[string]any, secrets []any) []string {
 		uris = append(uris, value)
 	}
 
-	var collect func(any)
-	collect = func(value any) {
-		switch typed := value.(type) {
-		case map[string]any:
-			for _, key := range []string{"uris", "uri", "url"} {
-				raw, exists := typed[key]
-				if !exists {
-					continue
+	collect := func(values map[string]any) {
+		for _, key := range []string{"uris", "uri", "url"} {
+			raw, exists := values[key]
+			if !exists {
+				continue
+			}
+			switch uriValue := raw.(type) {
+			case string:
+				appendURI(uriValue)
+			case []string:
+				for _, uri := range uriValue {
+					appendURI(uri)
 				}
-				switch uriValue := raw.(type) {
-				case string:
-					appendURI(uriValue)
-				case []string:
-					for _, uri := range uriValue {
-						appendURI(uri)
-					}
-				case []any:
-					for _, uri := range uriValue {
-						if text, ok := uri.(string); ok {
-							appendURI(text)
-						}
+			case []any:
+				for _, uri := range uriValue {
+					if text, ok := uri.(string); ok {
+						appendURI(text)
 					}
 				}
-			}
-			for _, child := range typed {
-				switch child.(type) {
-				case map[string]any, []any:
-					collect(child)
-				}
-			}
-		case []any:
-			for _, child := range typed {
-				collect(child)
 			}
 		}
 	}
 
 	collect(metadata)
+	if resource, ok := metadata["resource"].(map[string]any); ok {
+		collect(resource)
+	}
 	for _, secret := range secrets {
-		collect(secret)
+		if values, ok := secret.(map[string]any); ok {
+			collect(values)
+			if resource, ok := values["resource"].(map[string]any); ok {
+				collect(resource)
+			}
+		}
 	}
 	return uris
 }

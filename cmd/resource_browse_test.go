@@ -92,6 +92,15 @@ func TestResourceBrowserLoadsOnlyRootInitially(t *testing.T) {
 	}
 }
 
+func TestResourceBrowserStartsInLoadingState(t *testing.T) {
+	t.Parallel()
+
+	model := newTestBrowser(t)
+	if !model.loading {
+		t.Fatal("browser should block input until the initial directory is loaded")
+	}
+}
+
 func TestFolderTreeRowsRenderHierarchy(t *testing.T) {
 	t.Parallel()
 
@@ -490,6 +499,21 @@ func TestResourceBrowserBuildsPassboltWebURLs(t *testing.T) {
 	}
 }
 
+func TestOpenBrowserRejectsUnsafeTargets(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{
+		"file:///tmp/secret",
+		"javascript:alert(1)",
+		"https://user:password@passbolt.test/app",
+		"https:///missing-host",
+	} {
+		if err := openBrowser(target); err == nil {
+			t.Fatalf("openBrowser(%q) unexpectedly succeeded", target)
+		}
+	}
+}
+
 func TestResourceTableColumnsRespondToWidthAndOmitUUID(t *testing.T) {
 	t.Parallel()
 
@@ -506,7 +530,6 @@ func TestResourceTableColumnsRespondToWidthAndOmitUUID(t *testing.T) {
 		}
 	}
 	rows := resourceTableRows([]browserEntry{{
-		kind:     resourceEntry,
 		resource: passbolt.ResourceSummary{Name: "API"},
 	}}, narrow)
 	if len(rows) != 1 || len(rows[0]) != 1 || rows[0][0] != "API" {
@@ -519,7 +542,6 @@ func TestResourceTableRowsDisplayPrimaryURI(t *testing.T) {
 
 	columns := resourceTableColumns(120)
 	rows := resourceTableRows([]browserEntry{{
-		kind: resourceEntry,
 		resource: passbolt.ResourceSummary{
 			Name: "API",
 			URI:  "https://primary.test",

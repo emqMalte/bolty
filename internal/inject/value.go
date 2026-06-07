@@ -2,13 +2,14 @@ package inject
 
 import (
 	"crypto/hmac"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- SHA-1 is required for RFC 6238 compatibility and is used only as an HMAC.
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base32"
 	"encoding/binary"
 	"fmt"
 	"hash"
+	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -205,14 +206,7 @@ func totpField(payload map[string]any, now time.Time, generate bool) (TOTPStatus
 	if value, ok := integerField(totp, "period"); ok {
 		period = value
 	}
-	if !generate {
-		return newTOTPStatus("", digits, period, now), true
-	}
-	code, err := generateTOTP(secret, algorithm, digits, period, now)
-	if err != nil {
-		return TOTPStatus{}, false
-	}
-	return newTOTPStatus(code, digits, period, now), true
+	return buildTOTPStatus(secret, algorithm, digits, period, now, generate)
 }
 
 func totpCodeFromURI(value string, now time.Time, generate bool) (TOTPStatus, bool) {
@@ -223,54 +217,50 @@ func totpCodeFromURI(value string, now time.Time, generate bool) (TOTPStatus, bo
 	query := parsed.Query()
 	digits := queryInteger(query, "digits", 6)
 	period := queryInteger(query, "period", 30)
-	if !generate {
-		return newTOTPStatus("", digits, period, now), true
+	return buildTOTPStatus(query.Get("secret"), query.Get("algorithm"), digits, period, now, generate)
+}
+
+func buildTOTPStatus(secret, algorithm string, digits, period int, now time.Time, generate bool) (TOTPStatus, bool) {
+	if _, _, err := totpKeyAndHash(secret, algorithm); err != nil {
+		return TOTPStatus{}, false
 	}
-	code, err := generateTOTP(query.Get("secret"), query.Get("algorithm"), digits, period, now)
+	status, err := newTOTPStatus("", digits, period, now)
 	if err != nil {
 		return TOTPStatus{}, false
 	}
-	return newTOTPStatus(code, digits, period, now), true
+	if !generate {
+		return status, true
+	}
+	status.Code, err = generateTOTP(secret, algorithm, digits, period, now)
+	return status, err == nil
 }
 
-func newTOTPStatus(code string, digits, period int, now time.Time) TOTPStatus {
+func newTOTPStatus(code string, digits, period int, now time.Time) (TOTPStatus, error) {
+	if err := validateTOTPWindow(digits, period, now); err != nil {
+		return TOTPStatus{}, err
+	}
 	periodDuration := time.Duration(period) * time.Second
-	nextCounter := now.Unix()/int64(period) + 1
+	unix := now.Unix()
+	periodSeconds := int64(period)
+	untilNext := periodSeconds - unix%periodSeconds
 	return TOTPStatus{
 		Code:      code,
 		Digits:    digits,
 		Period:    periodDuration,
-		ExpiresAt: time.Unix(nextCounter*int64(period), 0),
-	}
+		ExpiresAt: time.Unix(unix+untilNext, 0),
+	}, nil
 }
 
 func generateTOTP(secret, algorithm string, digits, period int, now time.Time) (string, error) {
-	if period <= 0 {
-		return "", fmt.Errorf("invalid TOTP period %d", period)
+	if err := validateTOTPWindow(digits, period, now); err != nil {
+		return "", err
 	}
-	if digits < 6 || digits > 8 {
-		return "", fmt.Errorf("invalid TOTP digits %d", digits)
-	}
-
-	normalizedSecret := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(secret), " ", ""))
-	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(normalizedSecret)
-	if err != nil || len(key) == 0 {
-		return "", fmt.Errorf("invalid TOTP secret")
+	key, hashFunc, err := totpKeyAndHash(secret, algorithm)
+	if err != nil {
+		return "", err
 	}
 
-	var hashFunc func() hash.Hash
-	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
-	case "", "SHA1":
-		hashFunc = sha1.New
-	case "SHA256":
-		hashFunc = sha256.New
-	case "SHA512":
-		hashFunc = sha512.New
-	default:
-		return "", fmt.Errorf("unsupported TOTP algorithm %q", algorithm)
-	}
-
-	counter := uint64(now.Unix() / int64(period))
+	counter := uint64(now.Unix() / int64(period)) // #nosec G115 -- validateTOTPWindow rejects negative timestamps.
 	message := make([]byte, 8)
 	binary.BigEndian.PutUint64(message, counter)
 	mac := hmac.New(hashFunc, key)
@@ -286,6 +276,50 @@ func generateTOTP(secret, algorithm string, digits, period int, now time.Time) (
 		modulus *= 10
 	}
 	return fmt.Sprintf("%0*d", digits, binaryCode%modulus), nil
+}
+
+func validateTOTPWindow(digits, period int, now time.Time) error {
+	if period <= 0 {
+		return fmt.Errorf("invalid TOTP period %d", period)
+	}
+	if digits < 6 || digits > 8 {
+		return fmt.Errorf("invalid TOTP digits %d", digits)
+	}
+	periodSeconds := int64(period)
+	if periodSeconds > int64(math.MaxInt64/time.Second) {
+		return fmt.Errorf("TOTP period %d is too large", period)
+	}
+	unix := now.Unix()
+	if unix < 0 {
+		return fmt.Errorf("TOTP timestamp predates the Unix epoch")
+	}
+	untilNext := periodSeconds - unix%periodSeconds
+	if unix > math.MaxInt64-untilNext {
+		return fmt.Errorf("TOTP expiry exceeds the supported time range")
+	}
+	return nil
+}
+
+func totpKeyAndHash(secret, algorithm string) ([]byte, func() hash.Hash, error) {
+	normalizedSecret := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(secret), " ", ""))
+	normalizedSecret = strings.TrimRight(normalizedSecret, "=")
+	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(normalizedSecret)
+	if err != nil || len(key) == 0 {
+		return nil, nil, fmt.Errorf("invalid TOTP secret")
+	}
+
+	var hashFunc func() hash.Hash
+	switch strings.ToUpper(strings.TrimSpace(algorithm)) {
+	case "", "SHA1":
+		hashFunc = sha1.New
+	case "SHA256":
+		hashFunc = sha256.New
+	case "SHA512":
+		hashFunc = sha512.New
+	default:
+		return nil, nil, fmt.Errorf("unsupported TOTP algorithm %q", algorithm)
+	}
+	return key, hashFunc, nil
 }
 
 func integerField(values map[string]any, key string) (int, bool) {
