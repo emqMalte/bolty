@@ -25,6 +25,45 @@ func TestGeneratedIndexResourcesRequestContainsResourceType(t *testing.T) {
 	}
 }
 
+func TestFolderResourceIndexRequestFiltersRoot(t *testing.T) {
+	t.Parallel()
+
+	params, editor, err := folderResourceIndexRequest("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := passboltapi.NewIndexResourcesRequest("https://passbolt.test", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := editor(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if got := req.URL.Query()["filter[has-parent][]"]; len(got) != 1 || got[0] != "false" {
+		t.Fatalf("unexpected root parent filter: %#v", got)
+	}
+}
+
+func TestFolderResourceIndexRequestFiltersFolder(t *testing.T) {
+	t.Parallel()
+
+	const folderID = "ae60d89c-f13b-4fb1-b2dc-c8dc806cac88"
+	params, editor, err := folderResourceIndexRequest(folderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if editor != nil {
+		t.Fatal("folder request should not need a custom editor")
+	}
+	req, err := passboltapi.NewIndexResourcesRequest("https://passbolt.test", params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.URL.Query().Get("filter[has-parent]"); got != folderID {
+		t.Fatalf("unexpected folder parent filter: %q", got)
+	}
+}
+
 func TestResourceServiceDecryptsV4Resource(t *testing.T) {
 	t.Parallel()
 
@@ -273,10 +312,16 @@ func TestSecretPayloadFromMetadataFindsNestedPassword(t *testing.T) {
 	payload = secretPayloadFromMetadata(map[string]any{
 		"password": "from-metadata",
 		"nested": map[string]any{
-			"totp": "otpauth://totp/test",
+			"totp": map[string]any{
+				"secret_key": "DAV3DS4ERAAF5QGH",
+				"period":     float64(30),
+				"digits":     float64(6),
+				"algorithm":  "SHA1",
+			},
 		},
 	})
-	if payload["password"] != "from-metadata" || payload["totp"] != "otpauth://totp/test" {
+	totp, ok := payload["totp"].(map[string]any)
+	if payload["password"] != "from-metadata" || !ok || totp["secret_key"] != "DAV3DS4ERAAF5QGH" {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
 }
@@ -587,6 +632,140 @@ func TestSummaryFromMetadataOmitsSecretFields(t *testing.T) {
 	}
 	if !summaryMatches(summary, "postgres") || !summaryMatches(summary, "database") {
 		t.Fatalf("summary should match visible fields: %#v", summary)
+	}
+}
+
+func TestSummaryFromMetadataUsesPrimaryAndPreservesAdditionalURIs(t *testing.T) {
+	t.Parallel()
+
+	summary := summaryFromMetadata("id", "v5", "password-string", map[string]any{
+		"name": "api",
+		"uris": []any{"https://primary.test", "https://secondary.test"},
+	})
+	if summary.URI != "https://primary.test" || summary.URL != "https://primary.test" {
+		t.Fatalf("unexpected primary URI: %#v", summary)
+	}
+	if got := strings.Join(summary.URIs, ","); got != "https://primary.test,https://secondary.test" {
+		t.Fatalf("unexpected URI collection: %q", got)
+	}
+	if !summaryMatches(summary, "secondary.test") {
+		t.Fatal("summary search should include additional URIs")
+	}
+}
+
+func TestResourceURIsSupportsLegacyAndNestedMetadata(t *testing.T) {
+	t.Parallel()
+
+	got := ResourceURIs(map[string]any{
+		"resource": map[string]any{
+			"uris": []string{"https://primary.test", "https://secondary.test"},
+			"uri":  "https://primary.test",
+		},
+	}, nil)
+	if value := strings.Join(got, ","); value != "https://primary.test,https://secondary.test" {
+		t.Fatalf("ResourceURIs() = %q", value)
+	}
+}
+
+func TestResourceURIsIgnoresURIKeysInsideCustomFields(t *testing.T) {
+	t.Parallel()
+
+	got := ResourceURIs(map[string]any{
+		"uri": "https://primary.test",
+		"custom_fields": map[string]any{
+			"url": "must-not-be-displayed",
+		},
+	}, []any{map[string]any{
+		"custom_fields": []any{map[string]any{
+			"name": "private endpoint",
+			"url":  "must-not-be-displayed-either",
+		}},
+	}})
+	if value := strings.Join(got, ","); value != "https://primary.test" {
+		t.Fatalf("ResourceURIs() = %q", value)
+	}
+}
+
+func TestFolderBreadcrumbBuildsRootToLeafPath(t *testing.T) {
+	t.Parallel()
+
+	folders := map[string]FolderSummary{
+		"root":   {ID: "root", Name: "Engineering"},
+		"child":  {ID: "child", ParentID: "root", Name: "Production"},
+		"nested": {ID: "nested", ParentID: "child", Name: "Databases"},
+	}
+	if got := folderBreadcrumb("nested", folders); got != "Engineering / Production / Databases" {
+		t.Fatalf("folderBreadcrumb() = %q", got)
+	}
+}
+
+func TestFolderBreadcrumbHandlesMissingFoldersAndCycles(t *testing.T) {
+	t.Parallel()
+
+	folders := map[string]FolderSummary{
+		"a": {ID: "a", ParentID: "b", Name: "A"},
+		"b": {ID: "b", ParentID: "a", Name: "B"},
+	}
+	if got := folderBreadcrumb("a", folders); got != "B / A" {
+		t.Fatalf("cycle breadcrumb = %q", got)
+	}
+	if got := folderBreadcrumb("missing", folders); got != "" {
+		t.Fatalf("missing breadcrumb = %q", got)
+	}
+}
+
+func TestListFolderSummariesReadsV4Hierarchy(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/folders.json" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"header": map[string]any{"status": "success"},
+			"body": []map[string]any{
+				{
+					"id":               "ae60d89c-f13b-4fb1-b2dc-c8dc806cac88",
+					"name":             "Engineering",
+					"created":          "1970-01-01T00:00:00Z",
+					"modified":         "1970-01-01T00:00:00Z",
+					"created_by":       "8bb80df5-700c-48ce-b568-85a60fc3c8f2",
+					"modified_by":      "8bb80df5-700c-48ce-b568-85a60fc3c8f2",
+					"folder_parent_id": nil,
+					"personal":         true,
+				},
+				{
+					"id":               "f1b79505-2371-422f-88d8-9c6326806b3d",
+					"name":             "Production",
+					"created":          "1970-01-01T00:00:00Z",
+					"modified":         "1970-01-01T00:00:00Z",
+					"created_by":       "8bb80df5-700c-48ce-b568-85a60fc3c8f2",
+					"modified_by":      "8bb80df5-700c-48ce-b568-85a60fc3c8f2",
+					"folder_parent_id": "ae60d89c-f13b-4fb1-b2dc-c8dc806cac88",
+					"personal":         true,
+				},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := NewClient(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folders, err := NewResourceService(newMemorySecretStore()).listFolderSummaries(context.Background(), client, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := folders["f1b79505-2371-422f-88d8-9c6326806b3d"]
+	if child.Name != "Production" || child.ParentID != "ae60d89c-f13b-4fb1-b2dc-c8dc806cac88" {
+		t.Fatalf("unexpected child folder: %#v", child)
+	}
+	if got := folderBreadcrumb(child.ID, folders); got != "Engineering / Production" {
+		t.Fatalf("unexpected breadcrumb: %q", got)
 	}
 }
 

@@ -145,10 +145,17 @@ Supported fields:
 - `username`
 - `password`
 - `uri`
-- `url`
+- `url` (alias of `uri`)
 - `description`
 - `totp`
 - `custom/<id-or-name>`
+
+The `totp` selector calculates the current one-time code from Passbolt's
+encrypted TOTP settings. The browser treats this value as sensitive, masks it
+until revealed, and shows the configured period's remaining seconds and a
+compact expiry indicator. The token is recalculated only when that period
+rolls over while visible; while hidden, only expiry metadata is updated.
+Sensitive values use fixed-width masks that do not reveal their actual length.
 
 Template injection works inside larger strings:
 
@@ -181,6 +188,36 @@ Search visible summary fields:
 ```bash
 bolty resources list --search postgres
 ```
+
+Interactively search resources, inspect their injectable fields, and copy a
+ready-to-paste template placeholder:
+
+```bash
+bolty resources browse
+```
+
+The browser opens at the root and loads only that directory's direct resources.
+The browse screen uses a split pane: a complete folder tree on the left and the
+current folder's direct resources on the right. Use `Tab`, `Shift+Tab`, or the
+left and right arrows to switch panes, then select a folder with `enter`.
+Previously visited folders are cached for the current session. Use `/` to
+filter the resources already loaded in the right pane.
+
+Press `g` for an explicit global search. Passbolt cannot server-search encrypted
+v5 metadata, so global search downloads and decrypts the complete resource
+index before filtering it locally. This can be slower on large vaults and is
+never done during normal folder browsing.
+
+Use `enter` to open a folder, inspect a resource, or copy the selected field
+reference. In resource details, press `c` to copy the selected field's value
+and `d` to open the full description in a scrollable view. Use `u`, left arrow,
+or backspace to navigate up; `r` to reveal or hide sensitive field values; `o`
+to open the selected folder or resource in the Passbolt website; and `q` to
+quit. Table columns collapse automatically in narrow terminals. Copied
+references use the resource UUID so they remain unambiguous. Resource details
+display the primary and all additional Passbolt URIs. The injectable `uri`
+selector resolves to the primary URI; `url` remains available as a compatible
+alias.
 
 Fetch and decrypt a single resource by UUID or exact name:
 

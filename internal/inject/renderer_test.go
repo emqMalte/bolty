@@ -2,9 +2,12 @@ package inject
 
 import (
 	"context"
+	"encoding/base32"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/emqmalte/bolty/internal/passbolt"
 )
@@ -63,6 +66,29 @@ func TestRenderReturnsResourceNotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `missing resource "missing"`) {
 		t.Fatalf("error should name the missing resource, got %v", err)
+	}
+}
+
+func TestRenderInjectsCurrentCodeFromPassboltTOTPObject(t *testing.T) {
+	t.Parallel()
+
+	rendered, err := Render(context.Background(), `TOTP={{passbolt://api/totp}}`, func(_ context.Context, _ string) (passbolt.DecryptedResource, error) {
+		return passbolt.DecryptedResource{
+			ID:            "api-id",
+			DecryptedName: "API",
+			Secrets: []any{map[string]any{"totp": map[string]any{
+				"secret_key": "DAV3DS4ERAAF5QGH",
+				"period":     float64(30),
+				"digits":     float64(6),
+				"algorithm":  "SHA1",
+			}}},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !regexp.MustCompile(`^TOTP=\d{6}$`).MatchString(rendered) {
+		t.Fatalf("unexpected rendered TOTP: %q", rendered)
 	}
 }
 
@@ -140,7 +166,7 @@ func TestPassboltRefValueFindsStableFields(t *testing.T) {
 		Secrets: []any{
 			map[string]any{
 				"password": "secret",
-				"totp":     "otpauth://totp/api",
+				"totp":     "123456",
 			},
 		},
 	}
@@ -151,7 +177,7 @@ func TestPassboltRefValueFindsStableFields(t *testing.T) {
 		FieldURI:      "https://api.test",
 		FieldURL:      "https://api.test",
 		FieldDesc:     "API password",
-		FieldTOTP:     "otpauth://totp/api",
+		FieldTOTP:     "123456",
 	}
 	for field, want := range cases {
 		got, err := passboltRefValue(resource, PassboltRef{Resource: "api", Field: field})
@@ -181,6 +207,111 @@ func TestPassboltRefValueFindsFirstNonEmptyURI(t *testing.T) {
 	}
 	if value != "https://primary.test" {
 		t.Fatalf("unexpected value: %q", value)
+	}
+}
+
+func TestGenerateTOTPRFC6238Vectors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		algorithm string
+		secret    string
+		want      string
+	}{
+		{"SHA1", "12345678901234567890", "94287082"},
+		{"SHA256", "12345678901234567890123456789012", "46119246"},
+		{"SHA512", "1234567890123456789012345678901234567890123456789012345678901234", "90693936"},
+	}
+	for _, test := range tests {
+		secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte(test.secret))
+		got, err := generateTOTP(secret, test.algorithm, 8, 30, time.Unix(59, 0))
+		if err != nil {
+			t.Fatalf("%s: %v", test.algorithm, err)
+		}
+		if got != test.want {
+			t.Fatalf("%s = %q, want %q", test.algorithm, got, test.want)
+		}
+	}
+}
+
+func TestTOTPFieldCalculatesCodeFromProvisioningURI(t *testing.T) {
+	t.Parallel()
+
+	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte("12345678901234567890"))
+	status, ok := totpField(map[string]any{
+		"totp": "otpauth://totp/API?secret=" + secret + "&algorithm=SHA1&digits=8&period=30",
+	}, time.Unix(59, 0), true)
+	if !ok || status.Code != "94287082" {
+		t.Fatalf("totpField() = %#v, %v", status, ok)
+	}
+	if status.Period != 30*time.Second || !status.ExpiresAt.Equal(time.Unix(60, 0)) {
+		t.Fatalf("unexpected TOTP timing: %#v", status)
+	}
+}
+
+func TestTOTPInfoDoesNotGenerateCode(t *testing.T) {
+	t.Parallel()
+
+	resource := passbolt.DecryptedResource{
+		Secrets: []any{map[string]any{"totp": map[string]any{
+			"secret_key": "DAV3DS4ERAAF5QGH",
+			"period":     float64(45),
+			"digits":     float64(6),
+			"algorithm":  "SHA1",
+		}}},
+	}
+	status, ok := TOTPInfoAt(resource, time.Unix(70, 0))
+	if !ok {
+		t.Fatal("expected TOTP metadata")
+	}
+	if status.Code != "" {
+		t.Fatalf("TOTP metadata generated a code: %q", status.Code)
+	}
+	if status.Digits != 6 || status.Period != 45*time.Second || !status.ExpiresAt.Equal(time.Unix(90, 0)) {
+		t.Fatalf("unexpected TOTP metadata: %#v", status)
+	}
+}
+
+func TestTOTPRejectsInvalidWindowsWithoutPanicking(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name   string
+		period int
+		now    time.Time
+	}{
+		{name: "zero period", period: 0, now: time.Unix(70, 0)},
+		{name: "negative time", period: 30, now: time.Unix(-1, 0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resource := passbolt.DecryptedResource{
+				Secrets: []any{map[string]any{"totp": map[string]any{
+					"secret_key": "DAV3DS4ERAAF5QGH",
+					"period":     test.period,
+					"digits":     6,
+					"algorithm":  "SHA1",
+				}}},
+			}
+			if _, ok := TOTPInfoAt(resource, test.now); ok {
+				t.Fatal("invalid TOTP metadata should not be available")
+			}
+			if _, ok := TOTPStatusAt(resource, test.now); ok {
+				t.Fatal("invalid TOTP metadata should not generate a code")
+			}
+		})
+	}
+}
+
+func TestGenerateTOTPAcceptsPaddedBase32Secret(t *testing.T) {
+	t.Parallel()
+
+	secret := base32.StdEncoding.EncodeToString([]byte("12345678901234567890"))
+	got, err := generateTOTP(secret, "SHA1", 8, 30, time.Unix(59, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "94287082" {
+		t.Fatalf("generateTOTP() = %q", got)
 	}
 }
 

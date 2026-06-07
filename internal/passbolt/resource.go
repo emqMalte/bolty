@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/ProtonMail/gopenpgp/v3/crypto"
@@ -32,14 +33,23 @@ type DecryptedResource struct {
 }
 
 type ResourceSummary struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	ResourceType string `json:"resource_type,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Username     string `json:"username,omitempty"`
-	URI          string `json:"uri,omitempty"`
-	URL          string `json:"url,omitempty"`
-	Description  string `json:"description,omitempty"`
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	ResourceType   string   `json:"resource_type,omitempty"`
+	Name           string   `json:"name,omitempty"`
+	Username       string   `json:"username,omitempty"`
+	URI            string   `json:"uri,omitempty"`
+	URIs           []string `json:"uris,omitempty"`
+	URL            string   `json:"url,omitempty"`
+	Description    string   `json:"description,omitempty"`
+	FolderParentID string   `json:"folder_parent_id,omitempty"`
+	FolderPath     string   `json:"folder_path,omitempty"`
+}
+
+type FolderSummary struct {
+	ID       string `json:"id"`
+	ParentID string `json:"parent_id,omitempty"`
+	Name     string `json:"name"`
 }
 
 func NewResourceService(store SecretStore) ResourceService {
@@ -69,6 +79,31 @@ func (s ResourceService) Get(ctx context.Context, profile Profile, idOrName stri
 }
 
 func (s ResourceService) List(ctx context.Context, profile Profile, search string, opts ...Option) ([]ResourceSummary, error) {
+	folders, err := s.ListFolders(ctx, profile, opts...)
+	if err != nil {
+		if s.Debug != nil {
+			fmt.Fprintf(s.Debug, "list resources: folder paths unavailable: %v\n", err)
+		}
+		folders = nil
+	}
+	resources, err := s.listResources(ctx, profile, indexResourcesParams(), nil, folderSummaryMap(folders), opts...)
+	if err != nil {
+		return nil, err
+	}
+	search = strings.ToLower(strings.TrimSpace(search))
+	if search == "" {
+		return resources, nil
+	}
+	filtered := resources[:0]
+	for _, summary := range resources {
+		if summaryMatches(summary, search) {
+			filtered = append(filtered, summary)
+		}
+	}
+	return filtered, nil
+}
+
+func (s ResourceService) ListFolders(ctx context.Context, profile Profile, opts ...Option) ([]FolderSummary, error) {
 	client, err := s.Auth.AuthenticatedClient(ctx, profile, opts...)
 	if err != nil {
 		return nil, err
@@ -79,7 +114,87 @@ func (s ResourceService) List(ctx context.Context, profile Profile, search strin
 	}
 	defer privateKey.ClearPrivateParams()
 
-	resp, err := client.IndexResourcesWithResponse(ctx, indexResourcesParams())
+	folders, err := s.listFolderSummaries(ctx, client, privateKey, profile.UserID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]FolderSummary, 0, len(folders))
+	for _, folder := range folders {
+		result = append(result, folder)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ParentID != result[j].ParentID {
+			return result[i].ParentID < result[j].ParentID
+		}
+		return strings.ToLower(result[i].Name) < strings.ToLower(result[j].Name)
+	})
+	return result, nil
+}
+
+func (s ResourceService) ListFolder(ctx context.Context, profile Profile, parentID string, folders []FolderSummary, opts ...Option) ([]ResourceSummary, error) {
+	params, editor, err := folderResourceIndexRequest(parentID)
+	if err != nil {
+		return nil, err
+	}
+	return s.listResources(ctx, profile, params, editor, folderSummaryMap(folders), opts...)
+}
+
+func folderResourceIndexRequest(parentID string) (*passboltapi.IndexResourcesParams, passboltapi.RequestEditorFn, error) {
+	params := indexResourcesParams()
+	parentID = nullableUUIDString(parentID)
+	if parentID == "" {
+		editor := func(_ context.Context, req *http.Request) error {
+			query := req.URL.Query()
+			query.Add("filter[has-parent][]", "false")
+			req.URL.RawQuery = query.Encode()
+			return nil
+		}
+		return params, editor, nil
+	} else {
+		parsed, err := parseUUID(parentID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid folder id: %w", err)
+		}
+		filter := passboltapi.FilterHasParent(parsed)
+		params.FilterHasParent = &filter
+	}
+	return params, nil, nil
+}
+
+func (s ResourceService) SearchAll(ctx context.Context, profile Profile, search string, folders []FolderSummary, opts ...Option) ([]ResourceSummary, error) {
+	search = strings.ToLower(strings.TrimSpace(search))
+	if search == "" {
+		return nil, errors.New("global resource search requires a search term")
+	}
+	resources, err := s.listResources(ctx, profile, indexResourcesParams(), nil, folderSummaryMap(folders), opts...)
+	if err != nil {
+		return nil, err
+	}
+	filtered := resources[:0]
+	for _, summary := range resources {
+		if summaryMatches(summary, search) {
+			filtered = append(filtered, summary)
+		}
+	}
+	return filtered, nil
+}
+
+func (s ResourceService) listResources(ctx context.Context, profile Profile, params *passboltapi.IndexResourcesParams, editor passboltapi.RequestEditorFn, folders map[string]FolderSummary, opts ...Option) ([]ResourceSummary, error) {
+	client, err := s.Auth.AuthenticatedClient(ctx, profile, opts...)
+	if err != nil {
+		return nil, err
+	}
+	privateKey, err := s.Auth.unlockedPrivateKey(profile.Name)
+	if err != nil {
+		return nil, fmt.Errorf("unlock profile private key: %w", err)
+	}
+	defer privateKey.ClearPrivateParams()
+
+	var editors []passboltapi.RequestEditorFn
+	if editor != nil {
+		editors = append(editors, editor)
+	}
+	resp, err := client.IndexResourcesWithResponse(ctx, params, editors...)
 	if err != nil {
 		return nil, fmt.Errorf("list resources: %w", err)
 	}
@@ -87,16 +202,14 @@ func (s ResourceService) List(ctx context.Context, profile Profile, search strin
 		return nil, apiResponseError("list resources", resp.Status(), resp.Body)
 	}
 
-	search = strings.ToLower(strings.TrimSpace(search))
 	summaries := make([]ResourceSummary, 0, len(resp.JSON200.Body))
 	for _, item := range resp.JSON200.Body {
 		summary, err := s.resourceSummary(ctx, client, item, privateKey, profile.UserID)
 		if err != nil {
 			return nil, err
 		}
-		if search == "" || summaryMatches(summary, search) {
-			summaries = append(summaries, summary)
-		}
+		summary.FolderPath = folderBreadcrumb(summary.FolderParentID, folders)
+		summaries = append(summaries, summary)
 	}
 	return summaries, nil
 }
@@ -128,7 +241,9 @@ func (s ResourceService) resourceSummary(ctx context.Context, client *Client, it
 				fmt.Fprintf(s.Debug, "list summary: could not decrypt metadata for %s: %v\n", v5.Id, err)
 			}
 		}
-		return summaryFromMetadata(v5.Id.String(), "v5", resourceTypeSlug(v5.ResourceType), metadata), nil
+		summary := summaryFromMetadata(v5.Id.String(), "v5", resourceTypeSlug(v5.ResourceType), metadata)
+		summary.FolderParentID = nullableUUIDString(v5.FolderParentId.String())
+		return summary, nil
 	}
 	v4, err := item.AsResourceV4IndexAndView()
 	if err != nil {
@@ -140,13 +255,16 @@ func (s ResourceService) resourceSummary(ctx context.Context, client *Client, it
 		"uri":         v4.Uri,
 		"description": v4.Description,
 	}
-	return summaryFromMetadata(v4.Id.String(), "v4", resourceTypeSlug(v4.ResourceType), metadata), nil
+	summary := summaryFromMetadata(v4.Id.String(), "v4", resourceTypeSlug(v4.ResourceType), metadata)
+	summary.FolderParentID = nullableUUIDString(v4.FolderParentId.String())
+	return summary, nil
 }
 
 func summaryFromMetadata(id, kind, resourceType string, metadata map[string]any) ResourceSummary {
-	uri := findMetadataString(metadata, "uri")
-	if uri == "" {
-		uri = findMetadataString(metadata, "url")
+	uris := ResourceURIs(metadata, nil)
+	uri := ""
+	if len(uris) > 0 {
+		uri = uris[0]
 	}
 	return ResourceSummary{
 		ID:           id,
@@ -155,19 +273,125 @@ func summaryFromMetadata(id, kind, resourceType string, metadata map[string]any)
 		Name:         metadataName(metadata),
 		Username:     findMetadataString(metadata, "username"),
 		URI:          uri,
+		URIs:         uris,
 		URL:          uri,
 		Description:  findMetadataString(metadata, "description"),
 	}
 }
 
 func summaryMatches(summary ResourceSummary, search string) bool {
-	values := []string{summary.ID, summary.Type, summary.ResourceType, summary.Name, summary.Username, summary.URI, summary.URL, summary.Description}
+	values := []string{summary.ID, summary.Type, summary.ResourceType, summary.Name, summary.Username, summary.URI, summary.URL, summary.Description, summary.FolderPath}
+	values = append(values, summary.URIs...)
 	for _, value := range values {
 		if strings.Contains(strings.ToLower(value), search) {
 			return true
 		}
 	}
 	return false
+}
+
+func (s ResourceService) listFolderSummaries(ctx context.Context, client *Client, privateKey *crypto.Key, userID string) (map[string]FolderSummary, error) {
+	resp, err := client.IndexFoldersWithResponse(ctx, &passboltapi.IndexFoldersParams{})
+	if err != nil {
+		return nil, fmt.Errorf("list folders: %w", err)
+	}
+	if resp.JSON200 == nil {
+		return nil, apiResponseError("list folders", resp.Status(), resp.Body)
+	}
+
+	folders := make(map[string]FolderSummary, len(resp.JSON200.Body))
+	for _, item := range resp.JSON200.Body {
+		raw, err := item.MarshalJSON()
+		if err != nil {
+			return nil, fmt.Errorf("read index folder: %w", err)
+		}
+		env, err := parseResourceEnvelope(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse index folder: %w", err)
+		}
+		if env.IsV5 {
+			folder, err := item.AsFolderV5IndexAndView()
+			if err != nil {
+				return nil, fmt.Errorf("decode v5 index folder: %w", err)
+			}
+			metadata := map[string]any{}
+			if strings.TrimSpace(folder.Metadata) != "" {
+				env.RawMetadataKeyType = string(folder.MetadataKeyType)
+				env.MetadataKeyType = normalizeMetadataKeyType(env.RawMetadataKeyType, folder.MetadataKeyId.String())
+				env.MetadataKeyID = folder.MetadataKeyId.String()
+				plain, decryptErr := s.decryptV5Payload(ctx, client, folder.Metadata, env, privateKey, userID)
+				if decryptErr == nil {
+					_ = json.Unmarshal(plain, &metadata)
+				} else if s.Debug != nil {
+					fmt.Fprintf(s.Debug, "folder summary: could not decrypt metadata for %s: %v\n", folder.Id, decryptErr)
+				}
+			}
+			id := folder.Id.String()
+			folders[id] = FolderSummary{
+				ID:       id,
+				ParentID: nullableUUIDString(folder.FolderParentId.String()),
+				Name:     metadataName(metadata),
+			}
+			continue
+		}
+
+		folder, err := item.AsFolderV4IndexAndView()
+		if err != nil {
+			return nil, fmt.Errorf("decode v4 index folder: %w", err)
+		}
+		id := folder.Id.String()
+		folders[id] = FolderSummary{
+			ID:       id,
+			ParentID: nullableUUIDString(folder.FolderParentId.String()),
+			Name:     strings.TrimSpace(folder.Name),
+		}
+	}
+	return folders, nil
+}
+
+func folderSummaryMap(folders []FolderSummary) map[string]FolderSummary {
+	result := make(map[string]FolderSummary, len(folders))
+	for _, folder := range folders {
+		result[folder.ID] = folder
+	}
+	return result
+}
+
+func folderBreadcrumb(parentID string, folders map[string]FolderSummary) string {
+	parentID = nullableUUIDString(parentID)
+	if parentID == "" {
+		return ""
+	}
+
+	var names []string
+	seen := map[string]struct{}{}
+	for parentID != "" {
+		if _, exists := seen[parentID]; exists {
+			break
+		}
+		seen[parentID] = struct{}{}
+		folder, ok := folders[parentID]
+		if !ok {
+			break
+		}
+		name := strings.TrimSpace(folder.Name)
+		if name == "" {
+			name = folder.ID[:min(8, len(folder.ID))]
+		}
+		names = append(names, name)
+		parentID = nullableUUIDString(folder.ParentID)
+	}
+	for left, right := 0, len(names)-1; left < right; left, right = left+1, right-1 {
+		names[left], names[right] = names[right], names[left]
+	}
+	return strings.Join(names, " / ")
+}
+
+func nullableUUIDString(value string) string {
+	if isZeroUUID(value) {
+		return ""
+	}
+	return value
 }
 
 func viewResourceParams() *passboltapi.ViewResourceParams {
@@ -521,10 +745,13 @@ func supplementSecretsFromMetadata(metadata map[string]any, secrets []any) []any
 
 func secretPayloadFromMetadata(metadata map[string]any) map[string]any {
 	payload := map[string]any{}
-	for _, key := range []string{"password", "description", "totp"} {
+	for _, key := range []string{"password", "description"} {
 		if value := findMetadataString(metadata, key); value != "" {
 			payload[key] = value
 		}
+	}
+	if value, ok := findMetadataValue(metadata, "totp"); ok {
+		payload["totp"] = value
 	}
 	if len(payload) > 0 {
 		return payload
@@ -533,6 +760,29 @@ func secretPayloadFromMetadata(metadata map[string]any) map[string]any {
 		return copyStringFields(metadata, []string{"password", "description", "totp", "uri", "username"})
 	}
 	return nil
+}
+
+func findMetadataValue(metadata map[string]any, key string) (any, bool) {
+	if value, exists := metadata[key]; exists {
+		return value, true
+	}
+	for _, child := range metadata {
+		switch typed := child.(type) {
+		case map[string]any:
+			if value, ok := findMetadataValue(typed, key); ok {
+				return value, true
+			}
+		case []any:
+			for _, item := range typed {
+				if object, ok := item.(map[string]any); ok {
+					if value, ok := findMetadataValue(object, key); ok {
+						return value, true
+					}
+				}
+			}
+		}
+	}
+	return nil, false
 }
 
 func findMetadataString(metadata map[string]any, key string) string {
@@ -556,6 +806,62 @@ func findMetadataString(metadata map[string]any, key string) string {
 		}
 	}
 	return ""
+}
+
+// ResourceURIs returns the primary URI followed by any additional URIs.
+// Passbolt v5 stores these in metadata.uris, while older resource types may
+// expose a scalar uri or url.
+func ResourceURIs(metadata map[string]any, secrets []any) []string {
+	var uris []string
+	seen := map[string]struct{}{}
+	appendURI := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, exists := seen[value]; exists {
+			return
+		}
+		seen[value] = struct{}{}
+		uris = append(uris, value)
+	}
+
+	collect := func(values map[string]any) {
+		for _, key := range []string{"uris", "uri", "url"} {
+			raw, exists := values[key]
+			if !exists {
+				continue
+			}
+			switch uriValue := raw.(type) {
+			case string:
+				appendURI(uriValue)
+			case []string:
+				for _, uri := range uriValue {
+					appendURI(uri)
+				}
+			case []any:
+				for _, uri := range uriValue {
+					if text, ok := uri.(string); ok {
+						appendURI(text)
+					}
+				}
+			}
+		}
+	}
+
+	collect(metadata)
+	if resource, ok := metadata["resource"].(map[string]any); ok {
+		collect(resource)
+	}
+	for _, secret := range secrets {
+		if values, ok := secret.(map[string]any); ok {
+			collect(values)
+			if resource, ok := values["resource"].(map[string]any); ok {
+				collect(resource)
+			}
+		}
+	}
+	return uris
 }
 
 func copyStringFields(metadata map[string]any, keys []string) map[string]any {
