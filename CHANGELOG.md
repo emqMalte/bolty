@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/emqMalte/bolty/compare/v0.3.4...v0.4.0) (2026-06-07)
+
+
+### Features
+
+* resource browser ([#16](https://github.com/emqMalte/bolty/issues/16)) ([c7b2d64](https://github.com/emqMalte/bolty/commit/c7b2d6420b1481435f40bb45c1ac4b8d7d0ba428))
+
 ## [0.3.4](https://github.com/emqMalte/bolty/compare/v0.3.3...v0.3.4) (2026-06-06)
 
 
