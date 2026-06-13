@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/emqMalte/bolty/compare/v0.4.0...v0.4.1) (2026-06-13)
+
+
+### Dependencies
+
+* bump github.com/charmbracelet/bubbles from 0.21.0 to 1.0.0 ([#22](https://github.com/emqMalte/bolty/issues/22)) ([ab1ff04](https://github.com/emqMalte/bolty/commit/ab1ff0455461883c3313110c9285cb88d965a868))
+* bump golang.org/x/term from 0.43.0 to 0.44.0 ([#21](https://github.com/emqMalte/bolty/issues/21)) ([9289ed8](https://github.com/emqMalte/bolty/commit/9289ed896c034b0ca642ffe8cd34dfe600cf55b7))
+
 ## [0.4.0](https://github.com/emqMalte/bolty/compare/v0.3.4...v0.4.0) (2026-06-07)
 
 
