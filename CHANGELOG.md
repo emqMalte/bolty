@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.2](https://github.com/emqMalte/bolty/compare/v0.4.1...v0.4.2) (2026-07-12)
+
+
+### Dependencies
+
+* bump github.com/oapi-codegen/nullable from 1.1.0 to 1.2.0 ([#26](https://github.com/emqMalte/bolty/issues/26)) ([ca23103](https://github.com/emqMalte/bolty/commit/ca231038a12ae89127ee6e822d918fdcae70c655))
+* bump github.com/oapi-codegen/runtime from 1.4.1 to 1.4.2 ([#27](https://github.com/emqMalte/bolty/issues/27)) ([ca0bb3b](https://github.com/emqMalte/bolty/commit/ca0bb3bc03983c505d99894b6474e7267cdeaad1))
+* bump golang.org/x/crypto from 0.46.0 to 0.52.0 ([#33](https://github.com/emqMalte/bolty/issues/33)) ([1b02c08](https://github.com/emqMalte/bolty/commit/1b02c08c1eabfeedd715adafe1d98a97616982ad))
+* bump golang.org/x/term from 0.44.0 to 0.45.0 ([#31](https://github.com/emqMalte/bolty/issues/31)) ([f230300](https://github.com/emqMalte/bolty/commit/f230300a4e1527a318ef902b470bb1bd79135474))
+
 ## [0.4.1](https://github.com/emqMalte/bolty/compare/v0.4.0...v0.4.1) (2026-06-13)
 
 
