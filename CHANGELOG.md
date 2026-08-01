@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.3](https://github.com/emqMalte/bolty/compare/v0.4.2...v0.4.3) (2026-08-01)
+
+
+### Dependencies
+
+* bump github.com/getkin/kin-openapi from 0.135.0 to 0.144.0 ([#40](https://github.com/emqMalte/bolty/issues/40)) ([caec3ba](https://github.com/emqMalte/bolty/commit/caec3ba25af23384c56821d19234953b0bcc306c))
+* bump github.com/oapi-codegen/oapi-codegen/v2 from 2.7.0 to 2.7.1 ([#37](https://github.com/emqMalte/bolty/issues/37)) ([571df40](https://github.com/emqMalte/bolty/commit/571df409bcc91b965b40c3568578a77b605cc495))
+* bump github.com/oapi-codegen/runtime from 1.4.2 to 1.6.0 ([#36](https://github.com/emqMalte/bolty/issues/36)) ([27f81b6](https://github.com/emqMalte/bolty/commit/27f81b6f08b003f4ee17bf6895287a2dd138195d))
+
 ## [0.4.2](https://github.com/emqMalte/bolty/compare/v0.4.1...v0.4.2) (2026-07-12)
 
 
