@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.4](https://github.com/emqMalte/bolty/compare/v0.4.3...v0.4.4) (2026-09-04)
+
+
+### Dependencies
+
+* bump github.com/oapi-codegen/runtime from 1.6.0 to 1.7.0 ([#43](https://github.com/emqMalte/bolty/issues/43)) ([a1e5fa2](https://github.com/emqMalte/bolty/commit/a1e5fa259321a6634861fc0ad221c4c2f6985661))
+
 ## [0.4.3](https://github.com/emqMalte/bolty/compare/v0.4.2...v0.4.3) (2026-08-01)
 
 
