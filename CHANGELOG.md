@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.5](https://github.com/emqMalte/bolty/compare/v0.4.4...v0.4.5) (2026-09-30)
+
+
+### Dependencies
+
+* bump golang.org/x/term from 0.45.0 to 0.46.0 ([#49](https://github.com/emqMalte/bolty/issues/49)) ([002dd38](https://github.com/emqMalte/bolty/commit/002dd387103c845bec15d6e79b36b8be0d948c2a))
+
 ## [0.4.4](https://github.com/emqMalte/bolty/compare/v0.4.3...v0.4.4) (2026-09-07)
 
 
