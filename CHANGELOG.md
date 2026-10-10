@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.5](https://github.com/emqMalte/bolty/compare/v0.4.4...v0.4.5) (2026-10-10)
+
+
+### Dependencies
+
+* bump github.com/ProtonMail/gopenpgp/v3 from 3.4.1 to 3.5.2 ([#56](https://github.com/emqMalte/bolty/issues/56)) ([f2eebe1](https://github.com/emqMalte/bolty/commit/f2eebe14a5ac3a68abb77b2d1bf6dfcd48f6d93d))
+* bump golang.org/x/term from 0.45.0 to 0.46.0 ([#49](https://github.com/emqMalte/bolty/issues/49)) ([002dd38](https://github.com/emqMalte/bolty/commit/002dd387103c845bec15d6e79b36b8be0d948c2a))
+
 ## [0.4.4](https://github.com/emqMalte/bolty/compare/v0.4.3...v0.4.4) (2026-09-07)
 
 
