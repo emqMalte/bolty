@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.5](https://github.com/emqMalte/bolty/compare/v0.4.4...v0.4.5) (2026-11-08)
+
+
+### Dependencies
+
+* bump github.com/getkin/kin-openapi from 0.144.0 to 0.149.0 ([#62](https://github.com/emqMalte/bolty/issues/62)) ([b7a0645](https://github.com/emqMalte/bolty/commit/b7a064502e0db3e3a9081d8a2482635470a4a051))
+* bump github.com/oapi-codegen/runtime from 1.7.0 to 1.8.0 ([#64](https://github.com/emqMalte/bolty/issues/64)) ([cc4c5c8](https://github.com/emqMalte/bolty/commit/cc4c5c8934f3faa82ff1d3d67f6ffdf884ace0d2))
+* bump github.com/ProtonMail/gopenpgp/v3 from 3.4.1 to 3.5.2 ([#56](https://github.com/emqMalte/bolty/issues/56)) ([f2eebe1](https://github.com/emqMalte/bolty/commit/f2eebe14a5ac3a68abb77b2d1bf6dfcd48f6d93d))
+* bump golang.org/x/term from 0.45.0 to 0.46.0 ([#49](https://github.com/emqMalte/bolty/issues/49)) ([002dd38](https://github.com/emqMalte/bolty/commit/002dd387103c845bec15d6e79b36b8be0d948c2a))
+
 ## [0.4.4](https://github.com/emqMalte/bolty/compare/v0.4.3...v0.4.4) (2026-09-07)
 
 
